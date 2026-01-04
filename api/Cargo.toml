@@ -1,0 +1,25 @@
+[package]
+name = "web-nexus-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+web-nexus-contracts = { path = "../contracts" }
+web-nexus-state = { path = "../state" }
+
+# Cloudflare Workers
+worker = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }

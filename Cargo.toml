@@ -1,0 +1,70 @@
+[workspace]
+members = [
+    "contracts",
+    "state",
+    "api",
+    "edge",
+    "cms",
+]
+
+# Note: Each website deployment is a separate repo
+# Example: mikeandthemonsters/ uses web-nexus-contracts as dependency
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Web Nexus Team"]
+license = "MIT"
+repository = "https://github.com/dwillitzer/web-nexus-cms"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# WebAssembly
+wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = "0.3"
+
+# CRDT & State
+crdts = "7.3"
+automerge = "0.5"
+
+# Cloudflare Workers
+worker = { version = "0.4", features = ["http", "axum"] }
+
+# Web Framework (Leptos for WASM)
+leptos = "0.7"
+leptos_axum = "0.7"
+leptos_meta = "0.7"
+
+# Validation
+garde = { version = "0.20", features = ["derive"] }
+
+# OpenAPI
+utoipa = "5"
+utoipa-swagger-ui = "8"
+
+# Error Handling
+color-eyre = "0.6"
+thiserror = "2.0"
+
+# Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.release.package."*"]
+opt-level = 3

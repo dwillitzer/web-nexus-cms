@@ -1,0 +1,48 @@
+[package]
+name = "web-nexus-cms"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+web-nexus-contracts = { path = "../contracts" }
+web-nexus-state = { path = "../state" }
+
+# Leptos (WASM framework)
+leptos = { workspace = true }
+leptos_axum = { workspace = true }
+leptos_meta = { workspace = true }
+
+# WebAssembly
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { workspace = true }
+
+# UI Components
+leptos-use = "0.13"
+# Note: Add specific icon packs as needed
+# leptos_icons = { version = "0.4", features = ["log", "Bs", "Fa", "Oi"] }
+
+# Routing
+leptos_router = "0.7"
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+color-eyre = { workspace = true }
+thiserror = { workspace = true }
+
+# Tracing
+tracing = { workspace = true }
+tracing-web = "0.1"
+
+[features]
+default = ["hydrate"]
+hydrate = ["leptos/hydrate"]
+ssr = ["leptos/ssr"]
