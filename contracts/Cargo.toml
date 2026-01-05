@@ -9,6 +9,7 @@ serde_json = { workspace = true }
 chrono = "0.4"
 garde = { workspace = true, features = ["email"] }
 utoipa = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

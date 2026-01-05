@@ -11,12 +11,19 @@ web-nexus-state = { path = "../state" }
 worker = { workspace = true }
 
 # Async
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt"] }
 async-trait = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Validation
+garde = { workspace = true }
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 # Error handling
 thiserror = { workspace = true }

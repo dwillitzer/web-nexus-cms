@@ -493,6 +493,55 @@ pub struct ApiError {
     pub request_id: Option<String>,
 }
 
+/// Internal API error type (for Rust code)
+
+#[derive(Debug, thiserror::Error)]
+pub enum ApiErrorKind {
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+
+    #[error("Unauthorized access")]
+    Unauthorized,
+
+    #[error("Forbidden")]
+    Forbidden,
+
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+
+    #[error("Internal server error: {0}")]
+    Internal(String),
+}
+
+/// Type alias for Result with ApiErrorKind
+pub type Result<T> = std::result::Result<T, ApiErrorKind>;
+
+/// Convert ApiErrorKind to ApiError response struct
+
+impl From<ApiErrorKind> for ApiError {
+    fn from(kind: ApiErrorKind) -> Self {
+        let (code, message) = match &kind {
+            ApiErrorKind::NotFound(_) => ("NOT_FOUND".to_string(),
+kind.to_string()),
+            ApiErrorKind::Unauthorized => ("UNAUTHORIZED".to_string(),
+kind.to_string()),
+            ApiErrorKind::Forbidden => ("FORBIDDEN".to_string(),
+kind.to_string()),
+            ApiErrorKind::ValidationError(_) => ("VALIDATION_ERROR".to_string(),
+kind.to_string()),
+            ApiErrorKind::Internal(_) => ("INTERNAL_ERROR".to_string(),
+kind.to_string()),
+        };
+
+        Self {
+            code,
+            message,
+            details: None,
+            request_id: None,
+        }
+    }
+}
+
 /// Authentication request
 
 #[derive(Serialize, Deserialize, Debug, Clone, Validate, ToSchema)]
@@ -517,6 +566,157 @@ pub struct LoginResponse {
     pub user: User,
     /// Token expires at
     pub expires_at: i64,
+}
+
+// ============================================================================
+// API REQUEST/RESPONSE DTOs
+// ============================================================================
+
+/// Request to create a new show
+
+#[derive(Serialize, Deserialize, Debug, Clone, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateShowRequest {
+    /// Site ID
+    #[garde(length(min = 1))]
+    pub site_id: String,
+    /// Show date (Unix timestamp)
+    #[garde(skip)]
+    pub date: i64,
+    /// Venue name
+    #[garde(length(min = 1))]
+    pub venue: String,
+    /// City
+    #[garde(skip)]
+    pub city: Option<String>,
+    /// Setlist ID (optional)
+    #[garde(skip)]
+    pub setlist_id: Option<String>,
+}
+
+/// Request to update a show
+
+#[derive(Serialize, Deserialize, Debug, Clone, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateShowRequest {
+    /// Show date (Unix timestamp)
+    #[garde(skip)]
+    pub date: Option<i64>,
+    /// Venue name
+    #[garde(skip)]
+    pub venue: Option<String>,
+    /// City
+    #[garde(skip)]
+    pub city: Option<String>,
+    /// Setlist ID
+    #[garde(skip)]
+    pub setlist_id: Option<String>,
+}
+
+/// Request to create a new song
+
+#[derive(Serialize, Deserialize, Debug, Clone, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSongRequest {
+    /// Song title
+    #[garde(length(min = 1))]
+    pub title: String,
+    /// Artist name
+    #[garde(skip)]
+    pub artist: Option<String>,
+    /// Duration in seconds
+    #[garde(skip)]
+    pub duration_seconds: Option<u32>,
+    /// Lyrics content
+    #[garde(skip)]
+    pub lyrics: Option<String>,
+}
+
+/// Request to create a blog post
+
+#[derive(Serialize, Deserialize, Debug, Clone, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBlogPostRequest {
+    /// Site ID
+    #[garde(length(min = 1))]
+    pub site_id: String,
+    /// Post title
+    #[garde(length(min = 1))]
+    pub title: String,
+    /// URL slug
+    #[garde(length(min = 1))]
+    pub slug: String,
+    /// Post content (Markdown or HTML)
+    #[garde(length(min = 1))]
+    pub content: String,
+    /// Short excerpt
+    #[garde(skip)]
+    pub excerpt: Option<String>,
+    /// Featured image URL
+    #[garde(skip)]
+    pub featured_image: Option<String>,
+    /// Whether post is published
+    #[garde(skip)]
+    pub published: Option<bool>,
+    /// Publication date
+    #[garde(skip)]
+    pub published_at: Option<i64>,
+}
+
+/// Request to create a photo
+
+#[derive(Serialize, Deserialize, Debug, Clone, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePhotoRequest {
+    /// Site ID
+    #[garde(length(min = 1))]
+    pub site_id: String,
+    /// Photo title
+    #[garde(length(min = 1))]
+    pub title: String,
+    /// Image URL
+    #[garde(length(min = 1))]
+    pub url: String,
+    /// Thumbnail URL
+    #[garde(skip)]
+    pub thumbnail_url: Option<String>,
+    /// Gallery ID
+    #[garde(skip)]
+    pub gallery_id: Option<String>,
+    /// Caption
+    #[garde(skip)]
+    pub caption: Option<String>,
+    /// Photo date
+    #[garde(skip)]
+    pub date: Option<i64>,
+}
+
+/// Request to create a video
+
+#[derive(Serialize, Deserialize, Debug, Clone, Validate, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateVideoRequest {
+    /// Site ID
+    #[garde(length(min = 1))]
+    pub site_id: String,
+    /// Video title
+    #[garde(length(min = 1))]
+    pub title: String,
+    /// Video URL
+    #[garde(length(min = 1))]
+    pub url: String,
+    /// Thumbnail URL
+    #[garde(skip)]
+    pub thumbnail_url: Option<String>,
+    /// Video type (youtube, vimeo, etc.)
+    #[garde(skip)]
+    pub video_type: Option<String>,
+    /// Duration in seconds
+    #[garde(skip)]
+    pub duration_seconds: Option<u32>,
+    /// Description
+    #[garde(skip)]
+    pub description: Option<String>,
 }
 
 // ============================================================================
@@ -558,7 +758,7 @@ impl Site {
 // ============================================================================
 
 /// Custom validation: date must be in the future
-fn is_future_date(date: i64) -> Result<(), garde::Error> {
+fn is_future_date(date: i64) -> std::result::Result<(), garde::Error> {
     let now = chrono::Utc::now().timestamp();
     if date > now {
         Ok(())
