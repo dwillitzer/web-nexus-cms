@@ -6,16 +6,74 @@
 
 use worker::*;
 use serde_json::json;
+use serde::{Deserialize, Serialize};
 use web_nexus_contracts::{
     Show, Song, Photo, Video, BlogPost, CreateShowRequest, UpdateShowRequest,
     CreateSongRequest, CreateBlogPostRequest, CreatePhotoRequest, CreateVideoRequest,
     ApiErrorKind, PaginatedResponse, ShowStatus, PostStatus, GalleryVisibility, VideoSource,
-    ImageDimensions,
+    ImageDimensions, User, Role,
 };
 use web_nexus_state::AppState;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use garde::Validate;
+use jsonwebtoken::{encode, decode, Validation, Algorithm, Header, EncodingKey, DecodingKey};
+use chrono::{Utc, Duration};
+
+/// JWT claims for user authentication
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Claims {
+    /// User ID
+    sub: String,
+    /// User email
+    email: String,
+    /// User roles
+    roles: Vec<String>,
+    /// Issued at
+    iat: i64,
+    /// Expiration time
+    exp: i64,
+    /// Issuer
+    iss: String,
+}
+
+/// Generate JWT token for user
+fn generate_jwt_token(user: &User, secret: &str) -> worker::Result<String> {
+    let now = Utc::now();
+    let expiration = now + Duration::hours(24);
+
+    let claims = Claims {
+        sub: user.id.clone(),
+        email: user.email.clone(),
+        roles: user.roles.iter().map(|r| format!("{:?}", r)).collect(),
+        iat: now.timestamp(),
+        exp: expiration.timestamp(),
+        iss: "web-nexus-cms".to_string(),
+    };
+
+    let mut header = Header::default();
+    header.alg = Algorithm::HS512;
+
+    encode(&header, &claims, &EncodingKey::from_secret(secret.as_ref()))
+        .map_err(|e| worker::Error::from(format!("JWT encoding failed: {}", e)))
+}
+
+/// Validate JWT token and extract claims
+fn validate_jwt_token(token: &str, secret: &str) -> worker::Result<Claims> {
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_ref()),
+        &Validation::new(Algorithm::HS512)
+    )
+    .map_err(|e| worker::Error::from(format!("JWT validation failed: {}", e)))?;
+
+    Ok(token_data.claims)
+}
+
+/// Extract user ID from JWT token
+fn extract_user_id_from_claims(claims: &Claims) -> String {
+    claims.sub.clone()
+}
 
 /// Shared application state for the Workers
 #[derive(Clone)]
@@ -139,16 +197,64 @@ impl ApiState {
     }
 }
 
-/// Extract user ID from JWT token (stub implementation)
-fn extract_user_id(_req: &Request) -> worker::Result<String> {
-    // TODO: Implement proper JWT validation
-    Ok("user-123".to_string()) // Stub for now
+/// Extract claims from JWT token in Authorization header
+fn extract_claims(req: &Request, jwt_secret: &str) -> worker::Result<Claims> {
+    // Extract Authorization header
+    let auth_header = req.headers().get("Authorization")
+        .map_err(|e| worker::Error::from(format!("Invalid Authorization header: {}", e)))?
+        .ok_or_else(|| worker::Error::from("Missing Authorization header"))?;
+
+    let auth_str = auth_header.to_string();
+
+    if !auth_str.starts_with("Bearer ") {
+        return Err(worker::Error::from("Invalid Authorization header format"));
+    }
+
+    let token = &auth_str[7..]; // Skip "Bearer "
+
+    // Validate JWT token and return claims
+    validate_jwt_token(token, jwt_secret)
 }
 
-/// Check if user has required permission (stub implementation)
-fn check_permission(_user_id: &str, _permission: &str) -> worker::Result<()> {
-    // TODO: Implement RBAC check
-    Ok(()) // Stub for now
+/// Extract user ID from JWT token
+fn extract_user_id(req: &Request, jwt_secret: &str) -> worker::Result<String> {
+    let claims = extract_claims(req, jwt_secret)?;
+    Ok(extract_user_id_from_claims(&claims))
+}
+
+/// Check if user has required permission based on JWT claims
+fn check_permission_from_claims(claims: &Claims, permission: &str) -> worker::Result<()> {
+    // Check if user has Admin role (has all permissions)
+    if claims.roles.contains(&"Admin".to_string()) {
+        return Ok(());
+    }
+
+    // Check specific permissions based on roles
+    match permission {
+        "create_shows" | "update_shows" | "delete_shows" => {
+            if claims.roles.contains(&"Content".to_string()) {
+                return Ok(());
+            }
+        }
+        "create_songs" => {
+            if claims.roles.contains(&"Content".to_string()) {
+                return Ok(());
+            }
+        }
+        "create_posts" | "update_posts" | "delete_posts" => {
+            if claims.roles.contains(&"Content".to_string()) {
+                return Ok(());
+            }
+        }
+        "create_photos" | "create_videos" => {
+            if claims.roles.contains(&"Media".to_string()) || claims.roles.contains(&"Content".to_string()) {
+                return Ok(());
+            }
+        }
+        _ => {}
+    }
+
+    Err(worker::Error::from("Forbidden: Insufficient permissions"))
 }
 
 /// Helper: Convert ApiErrorKind to Worker Response
@@ -189,6 +295,76 @@ fn parse_query_param<T: std::str::FromStr>(
         .find(|(k, _)| k == param)
         .and_then(|(_, v)| v.parse().ok())
         .unwrap_or(default)
+}
+
+/// Login request
+#[derive(Debug, Deserialize, Serialize)]
+struct LoginRequest {
+    email: String,
+    password: String,
+}
+
+/// Login response
+#[derive(Debug, Deserialize, Serialize)]
+struct LoginResponse {
+    token: String,
+    user: UserInfo,
+}
+
+/// User info returned in login response
+#[derive(Debug, Deserialize, Serialize)]
+struct UserInfo {
+    id: String,
+    email: String,
+    roles: Vec<String>,
+}
+
+// ============================================================================
+// Auth Handlers
+// ============================================================================
+
+pub mod auth {
+    use super::*;
+
+    /// POST /api/auth/login - User login
+    pub async fn login(mut req: Request, ctx: RouteContext<ApiState>) -> worker::Result<Response> {
+        let body = req.json().await?;
+        let login_req: LoginRequest = serde_json::from_value(body)
+            .map_err(|e| worker::Error::from(format!("Invalid request: {}", e)))?;
+
+        // Validate request (basic validation)
+        if login_req.email.is_empty() || login_req.password.is_empty() {
+            return error_response(ApiErrorKind::ValidationError(
+                "Email and password are required".to_string()
+            ));
+        }
+
+        // Look up user by email (in production, would verify password hash)
+        let state = ctx.data.app_state.read().await;
+        let user = state.users.values()
+            .find(|u| u.email == login_req.email)
+            .ok_or_else(|| worker::Error::from("Unauthorized: User not found"))?;
+
+        // TODO: Verify password hash (using bcrypt or similar)
+        // For now, accept any password in development mode
+
+        // Generate JWT token
+        let token = generate_jwt_token(user, &ctx.data.jwt_secret)?;
+
+        // Prepare user info response
+        let user_info = UserInfo {
+            id: user.id.clone(),
+            email: user.email.clone(),
+            roles: user.roles.iter().map(|r| format!("{:?}", r)).collect(),
+        };
+
+        let response = LoginResponse {
+            token,
+            user: user_info,
+        };
+
+        Response::from_json(&response)
+    }
 }
 
 // ============================================================================
@@ -261,8 +437,8 @@ pub mod shows {
 
     /// POST /api/shows - Create a new show
     pub async fn create(mut req: Request, ctx: RouteContext<ApiState>) -> worker::Result<Response> {
-        let _user_id = extract_user_id(&req)?;
-        check_permission(&_user_id, "create_shows")?;
+        let claims = extract_claims(&req, &ctx.data.jwt_secret)?;
+        check_permission_from_claims(&claims, "create_shows")?;
 
         let body = req.json().await?;
         let create_req: CreateShowRequest = serde_json::from_value(body)
@@ -275,6 +451,7 @@ pub mod shows {
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
+        let user_id = extract_user_id_from_claims(&claims);
 
         let show = Show {
             id: id.clone(),
@@ -287,7 +464,7 @@ pub mod shows {
             ticket_url: None,
             description: None,
             status: ShowStatus::Upcoming,
-            created_by: _user_id,
+            created_by: user_id,
             created_at: now,
             updated_at: now,
         };
@@ -300,8 +477,8 @@ pub mod shows {
 
     /// PUT /api/shows/:id - Update a show
     pub async fn update(mut req: Request, ctx: RouteContext<ApiState>) -> worker::Result<Response> {
-        let user_id = extract_user_id(&req)?;
-        check_permission(&user_id, "update_shows")?;
+        let claims = extract_claims(&req, &ctx.data.jwt_secret)?;
+        check_permission_from_claims(&claims, "update_shows")?;
 
         let id = extract_id(&req)?;
         let body = req.json().await?;
@@ -338,8 +515,8 @@ pub mod shows {
 
     /// DELETE /api/shows/:id - Delete a show
     pub async fn delete(mut req: Request, ctx: RouteContext<ApiState>) -> worker::Result<Response> {
-        let user_id = extract_user_id(&req)?;
-        check_permission(&user_id, "delete_shows")?;
+        let claims = extract_claims(&req, &ctx.data.jwt_secret)?;
+        check_permission_from_claims(&claims, "delete_shows")?;
 
         let id = extract_id(&req)?;
 
@@ -365,8 +542,8 @@ pub mod songs {
 
     /// POST /api/songs - Create a new song
     pub async fn create(mut req: Request, ctx: RouteContext<ApiState>) -> worker::Result<Response> {
-        let user_id = extract_user_id(&req)?;
-        check_permission(&user_id, "create_songs")?;
+        let claims = extract_claims(&req, &ctx.data.jwt_secret)?;
+        check_permission_from_claims(&claims, "create_songs")?;
 
         let body = req.json().await?;
         let create_req: CreateSongRequest = serde_json::from_value(body)
@@ -430,8 +607,8 @@ pub mod posts {
 
     /// POST /api/posts - Create a new blog post
     pub async fn create(mut req: Request, ctx: RouteContext<ApiState>) -> worker::Result<Response> {
-        let user_id = extract_user_id(&req)?;
-        check_permission(&user_id, "create_posts")?;
+        let claims = extract_claims(&req, &ctx.data.jwt_secret)?;
+        check_permission_from_claims(&claims, "create_posts")?;
 
         let body = req.json().await?;
         let create_req: CreateBlogPostRequest = serde_json::from_value(body)
@@ -443,6 +620,7 @@ pub mod posts {
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
+        let user_id = extract_user_id_from_claims(&claims);
 
         let post = BlogPost {
             id: id.clone(),
@@ -505,8 +683,8 @@ pub mod photos {
 
     /// POST /api/photos - Create a new photo
     pub async fn create(mut req: Request, ctx: RouteContext<ApiState>) -> worker::Result<Response> {
-        let user_id = extract_user_id(&req)?;
-        check_permission(&user_id, "create_photos")?;
+        let claims = extract_claims(&req, &ctx.data.jwt_secret)?;
+        check_permission_from_claims(&claims, "create_photos")?;
 
         let body = req.json().await?;
         let create_req: CreatePhotoRequest = serde_json::from_value(body)
@@ -518,6 +696,7 @@ pub mod photos {
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
+        let user_id = extract_user_id_from_claims(&claims);
 
         // Extract filename from URL
         let filename = create_req.url.split('/').last().unwrap_or("photo.jpg").to_string();
@@ -560,8 +739,8 @@ pub mod videos {
 
     /// POST /api/videos - Create a new video
     pub async fn create(mut req: Request, ctx: RouteContext<ApiState>) -> worker::Result<Response> {
-        let user_id = extract_user_id(&req)?;
-        check_permission(&user_id, "create_videos")?;
+        let claims = extract_claims(&req, &ctx.data.jwt_secret)?;
+        check_permission_from_claims(&claims, "create_videos")?;
 
         let body = req.json().await?;
         let create_req: CreateVideoRequest = serde_json::from_value(body)
